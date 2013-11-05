@@ -47,7 +47,6 @@ mkdir -p /app/vendor
 # need to copy the binaries to /app/vendor so that R works
 cp -R $VENDOR_DIR/* /app/vendor/
 
-
 # R needs to know where gfortran and glibc header files are
 # For buildpacks that get run after, need to update PATH with location of R
 export PATH=/app/vendor/R/bin/:/app/vendor/gcc-4.3/bin:$PATH
@@ -84,3 +83,11 @@ pushd $VENDOR_DIR/glibc-2.7 > /dev/null && rm -rf !(string|time) && popd > /dev/
 
 # HACK
 cp $VENDOR_DIR/gcc-4.3/lib64/* $VENDOR_DIR/R/lib64/R/lib
+
+# Write a sane .Rprofile
+cat > /app/.Rprofile <<RPROFILE
+r <- getOption("repos");
+r["CRAN"] <- "$CRAN_MIRROR";
+options(repos=r);
+options(bitmapType="cairo")
+RPROFILE
