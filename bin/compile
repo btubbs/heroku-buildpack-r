@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
 # bin/compile <build-dir> <cache-dir>
 
-# fail fast
-set -e
-
-# debug
-# set -x
-
-shopt -s extglob
-
-function error() {
-  echo " !     $*" >&2
-  exit 1
-}
-
 function indent() {
   c='s/^/       /'
   case $(uname) in
@@ -22,62 +9,58 @@ function indent() {
   esac
 }
 
-# clean up leaking environment
-unset GIT_DIR
+shopt -s extglob
 
 # parse and derive params
 BUILD_DIR=$1
 CACHE_DIR="$2/vendor"
 LP_DIR=`cd $(dirname $0); cd ..; pwd`
-BUILDPACK_DIR="$(dirname $(dirname $0))"
 
 # config
-BUILD_PACK_VERSION="20130729"
-
-GCC_VERSION="4.3"
-GLIBC_VERSION="2.7"
-R_VERSION="2.15.1"
-
+R_VERSION="3.0.2"
 S3_BUCKET="heroku-buildpack-r"
-R_BINARIES="http://${S3_BUCKET}.s3.amazonaws.com/R-${R_VERSION}-binaries-${BUILD_PACK_VERSION}.tar.gz"
-
+R_BINARIES="http://yg-build.s3.amazonaws.com/R-heroku-3.0.2-20131105.0015.tar.gz"
 VENDOR_DIR="$BUILD_DIR/vendor"
 R_HOME="$VENDOR_DIR/R"
 CRAN_MIRROR="http://cran.revolutionanalytics.com"
 
 mkdir -p $CACHE_DIR
+mkdir -p $VENDOR_DIR
 
 # vendor R into the slug
 echo "Vendoring R $R_VERSION" | indent
 
-# download and unpack binaries
-echo "Downloading and unpacking R binaries" | indent
-mkdir -p $VENDOR_DIR && curl $R_BINARIES -s -o - | tar xzf - -C $VENDOR_DIR
+# Check if we can pull from cache rather than download tar
+if [ "$(cat $CACHE_DIR/R/bin/.version 2>/dev/null)" = "$R_VERSION" ]
+then
+  echo "Desired R version ($R_VERSION) cached" | indent
+  mkdir -p $VENDOR_DIR
+  cp -R $CACHE_DIR/* $VENDOR_DIR
+else
+  # download and unpack binaries
+  echo "Downloading and unpacking R binaries" | indent
+  mkdir -p $VENDOR_DIR && curl $R_BINARIES -s -o - | tar xzf - -C $VENDOR_DIR
+fi
+
+mkdir -p /app/vendor
 
 # need to copy the binaries to /app/vendor so that R works
-cp -R $VENDOR_DIR/gcc-$GCC_VERSION /app/vendor/gcc-$GCC_VERSION
-cp -R $VENDOR_DIR/glibc-$GLIBC_VERSION /app/vendor/glibc-$GLIBC_VERSION
-cp -R $VENDOR_DIR/R /app/vendor/R
+cp -R $VENDOR_DIR/* /app/vendor/
 
 
 # R needs to know where gfortran and glibc header files are
 # For buildpacks that get run after, need to update PATH with location of R
-export PATH=/app/vendor/R/bin:/app/vendor/gcc-$GCC_VERSION/bin:$PATH
-export LDFLAGS="-L/app/vendor/gcc-$GCC_VERSION/lib64/"
-export CPPFLAGS="-I/app/vendor/glibc-$GLIBC_VERSION/string/ -I/app/vendor/glibc-$GLIBC_VERSION/time"
-export R_HOME=/app/vendor/R
-export R_INCLUDE=$R_HOME/lib64/R/include
-
-# copy over environment
-mkdir -p $BUILD_DIR/.profile.d
-cp "$BUILDPACK_DIR/bin/r_environment.sh" $BUILD_DIR/.profile.d/r_environment.sh
-
-# prevent warnings
-mkdir -p /app/vendor/R/lib64/R/doc/html
-touch /app/vendor/R/lib64/R/doc/html/R.css
+export PATH=/app/vendor/R/bin/:/app/vendor/gcc-4.3/bin:$PATH
+export LDFLAGS=-L/app/vendor/gcc-4.3/lib64
+export CPPFLAGS=-I/app/vendor/glibc-2.7/string -I/app/vendor/glibc-2.7/time -I/app/vendor/cairo/include/cairo/include
+export LD_LIBRARY_PATH=/app/vendor/cairo:/app/vendor/fontconfig:/app/vendor/pixman:/app/vendor/libpng:/app/vendor/DirectFB:/app/vendor/freetype
+export PKG_CONFIG_PATH=/app/vendor/cairo/lib/pkgconfig:/app/vendor/fontconfig/lib/pkgconfig:/app/vendor/pixman/lib/pkgconfig:/app/vendor/libpng/lib/pkgconfig:/app/vendor/DirectFB/lib/pkgconfig:/app/vendor/freetype/lib/pkgconfig
+export R_INCLUDE=/app/vendor/R/lib64/R/include
 
 # install dependencies from CRAN
 echo "Executing init.r script" | indent
+mkdir -p /app/vendor/R/lib64/R/doc/html
+touch /app/vendor/R/lib64/R/doc/html/R.css
 
 # set the CRAN mirror and run the init.r program
 /app/vendor/R/bin/R -s <<RPROG > indent
@@ -93,13 +76,11 @@ echo "R $R_VERSION successfully installed" | indent
 
 # need to copy binaries back so that any installed packages are included in the slug
 rm -rf $VENDOR_DIR && mkdir -p $VENDOR_DIR
-cp -R /app/vendor/gcc-$GCC_VERSION $VENDOR_DIR/gcc-$GCC_VERSION
-cp -R /app/vendor/glibc-$GLIBC_VERSION $VENDOR_DIR/glibc-$GLIBC_VERSION
-cp -R /app/vendor/R $VENDOR_DIR/R
+cp -R /app/vendor/* $VENDOR_DIR/
+
+# removed unneeded files to make slug smaller
+pushd $VENDOR_DIR/gcc-4.3 > /dev/null && rm -rf !(lib64) && popd > /dev/null
+pushd $VENDOR_DIR/glibc-2.7 > /dev/null && rm -rf !(string|time) && popd > /dev/null
 
 # HACK
-cp $VENDOR_DIR/gcc-$GCC_VERSION/lib64/* $VENDOR_DIR/R/lib64/R/lib
-
-# remove unneeded files to make slug smaller
-# pushd $VENDOR_DIR/gcc-$GCC_VERSION > /dev/null && rm -rf !(lib64) && popd > /dev/null
-# pushd $VENDOR_DIR/glibc-$GLIBC_VERSION > /dev/null && rm -rf !(string|time) && popd > /dev/null
+cp $VENDOR_DIR/gcc-4.3/lib64/* $VENDOR_DIR/R/lib64/R/lib
